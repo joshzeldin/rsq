@@ -21,65 +21,32 @@ pub fn open<A: ToSocketAddrs>(addr: A, user: &str, pass: &str) -> Result<TcpStre
     }
 }
 
-pub fn to_kint(int: i32) -> [u8; 13]{
-    let mut msg: [u8; 13] = [1, 1, 0, 0, 13, 0, 0, 0, 250, 0, 0, 0, 0];
-    let mut buf = [0; 4];
-    LittleEndian::write_i32(&mut buf, int);
-    for (i, x) in buf.iter().rev().enumerate(){
-        msg[12 - i] = *x;
-    };
-    msg
-}
-
-pub fn to_klong(long: i64) -> [u8; 17]{
-    let mut msg: [u8; 17] = [1, 1, 0, 0, 17, 0, 0, 0, 249, 0, 0, 0, 0, 0, 0, 0, 0];
-    let mut buf = [0; 8];
-    LittleEndian::write_i64(&mut buf, long);
-    for (i, x) in buf.iter().rev().enumerate(){
-        msg[16 - i] = *x;
-    };
-    msg
-}
-
-pub fn to_kreal(real: f32) -> [u8; 13]{
-    let mut msg: [u8; 13] = [1, 1, 0, 0, 13, 0, 0, 0, 248, 0, 0, 0, 0];
-    let mut buf = [0; 4];
-    LittleEndian::write_f32(&mut buf, real);
-    for (i, x) in buf.iter().rev().enumerate(){
-        msg[12 - i] = *x;
-    };
-    msg
-}
-
-pub fn to_kfloat(float: f64) -> [u8; 17]{
-    let mut msg: [u8; 17] = [1, 1, 0, 0, 17, 0, 0, 0, 247, 0, 0, 0, 0, 0, 0, 0, 0];
-    let mut buf = [0; 8];
-    LittleEndian::write_f64(&mut buf, float);
-    for (i, x) in buf.iter().rev().enumerate(){
-        msg[16 - i] = *x;
-    };
-    msg
-}
-
-pub fn to_kdate(int: i32) -> [u8; 13]{
-    let mut msg: [u8; 13] = [1, 1, 0, 0, 13, 0, 0, 0, 242, 0, 0, 0, 0];
-    let mut buf = [0; 4];
-    LittleEndian::write_i32(&mut buf, int);
-    for (i, x) in buf.iter().rev().enumerate(){
-        msg[12 - i] = *x;
-    };
-    msg
-}
-
-pub fn send_async(stream: &mut TcpStream, data: &[u8]) {
-    stream.write(data).unwrap();
+pub fn send_async(stream: &mut TcpStream, data: &KObj) {
+    let header_bytes = [1, 0, 0, 0].iter().cloned();
+    let mut data_bytes = data.serialize().clone();
+    let type_bytes = [data.type_as_bytes()];
+    let mut size_bytes = vec![];
+    size_bytes.write_i32::<LittleEndian>((4 + header_bytes.len() + data_bytes.len() + type_bytes.len()) as i32).unwrap();
+    data_bytes.splice(0..0, type_bytes.iter().cloned());
+    data_bytes.splice(0..0, size_bytes.iter().cloned());
+    data_bytes.splice(0..0, header_bytes);
+    println!("Bytes: {:?}", data_bytes);
+    stream.write(&data_bytes).unwrap();
     stream.flush().unwrap();
 }
 
-pub fn send_sync(mut stream: &mut TcpStream, data: &[u8]) -> KObj {
-    stream.write(data).unwrap();
-    stream.flush().unwrap();
-    let response = read(&mut stream);
+pub fn send_sync(mut stream: &mut TcpStream, data: &KObj) -> KObj {
+    let header_bytes = [1, 1, 0, 0].iter().cloned();
+    let mut data_bytes = data.serialize().clone();
+    let type_bytes = [data.type_as_bytes()];
+    let mut size_bytes = vec![];
+    size_bytes.write_i32::<LittleEndian>((4 + header_bytes.len() + data_bytes.len() + type_bytes.len()) as i32).unwrap();
+    data_bytes.splice(0..0, type_bytes.iter().cloned());
+    data_bytes.splice(0..0, size_bytes.iter().cloned());
+    data_bytes.splice(0..0, header_bytes);
+    println!("Bytes: {:?}", data_bytes);
+    stream.write(&data_bytes).unwrap();
+    stream.flush().unwrap();    let response = read(&mut stream);
     response
 }
 
@@ -107,6 +74,7 @@ pub enum KType {
 }
 
 pub trait Serialize{
+    fn type_as_bytes(&self) -> u8;
     fn deserialize(&self, data: &Vec<u8>) -> KObj;
     fn serialize(&self) -> Vec<u8>;
 }
@@ -131,7 +99,7 @@ impl Serialize for KObj {
                 KType::Real(n) => {buf.write_f32::<LittleEndian>(*n).unwrap(); buf},
                 KType::Float(n) => {buf.write_f64::<LittleEndian>(*n).unwrap(); buf},
                 KType::Char(n) => vec![*n as u8],
-                KType::Symbol(_n) => vec![],
+                KType::Symbol(n) => {let mut sym = Vec::from(n.as_bytes());sym.push(0);sym},
                 KType::Timestamp(n) => {buf.write_i64::<LittleEndian>(n.timestamp_nanos() - 94668480000000000).unwrap(); buf},
                 KType::Month(n) => {buf.write_i32::<LittleEndian>(n.num_days_from_ce() - 730119).unwrap(); buf},
                 KType::Date(n) => {buf.write_i32::<LittleEndian>(n.num_days_from_ce() - 730119).unwrap(); buf},
@@ -148,6 +116,36 @@ impl Serialize for KObj {
         }
     }
 
+    fn type_as_bytes(&self) -> u8 {
+        let code = match self {
+            KObj::Atom(t) => match t {
+                KType::Boolean(_n)   => -01,
+                KType::Guid(_n)      => -02,
+                KType::Byte(_n)      => -04,
+                KType::Short(_n)     => -05,
+                KType::Int(_n)       => -06,
+                KType::Long(_n)      => -07,
+                KType::Real(_n)      => -08,
+                KType::Float(_n)     => -09,
+                KType::Char(_n)      => -10,
+                KType::Symbol(_n)   => -11,
+                KType::Timestamp(_n) => -12,
+                KType::Month(_n)     => -13,
+                KType::Date(_n)      => -14,
+                KType::Datetime(_n)  => -15,
+                KType::Timespan(_n)  => -16,
+                KType::Minute(_n)    => -17,
+                KType::Second(_n)    => -18,
+                KType::Time(_n)      => -19,
+                _ => 0
+            },
+            KObj::List(t) => match t {
+                _ => 0
+            }
+        };
+        code as u8
+    }
+
     fn deserialize(&self, data: &Vec<u8>) -> KObj{
         match self {
             KObj::Atom(t) => { 
@@ -161,7 +159,7 @@ impl Serialize for KObj {
                     KType::Real(_n) => KType::Real(LittleEndian::read_f32(data)),
                     KType::Float(_n) => KType::Float(LittleEndian::read_f64(data)),
                     KType::Char(_n) => KType::Char(data[0] as char),
-                    // KType::Symbol(n) => vec![0;1024],
+                    KType::Symbol(_n) => {let mut sym = data.clone();sym.pop();KType::Symbol(String::from_utf8(sym.to_vec()).unwrap())},
                     KType::Timestamp(_n) => {
                         let dt = LittleEndian::read_i64(data) + 946684800000000000;
                         KType::Timestamp(DateTime::<Utc>::from_utc(
@@ -244,7 +242,7 @@ fn read_data(stream: &mut TcpStream, header: &Header) -> KObj {
         KObj::Atom(KType::Real(_n)) => vec![0;4],
         KObj::Atom(KType::Float(_n)) => vec![0;8],
         KObj::Atom(KType::Char(_n)) => vec![0;1],
-        KObj::Atom(KType::Symbol(_n)) => vec![0;1024],
+        KObj::Atom(KType::Symbol(_n)) => vec![0;(header.length - 9) as usize],
         KObj::Atom(KType::Timestamp(_n)) => vec![0;8],
         KObj::Atom(KType::Month(_n)) => vec![0;4],
         KObj::Atom(KType::Date(_n)) => vec![0;4],
@@ -276,7 +274,7 @@ fn read_header(stream: &mut TcpStream) -> Header {
     stream.read(&mut endianness).unwrap();
     let mut protocol = [0;1]; 
     stream.read(&mut protocol).unwrap(); println!("reading protocol");
-    stream.read(&mut [0;2]).unwrap(); //throw away two padding bytes
+    stream.read(&mut [0;2]).unwrap(); // throw away two padding bytes
     let mut msg_length = [0;4];
     stream.read(&mut msg_length).unwrap(); println!("reading length");
     let mut msg_type = [0;1];
