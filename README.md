@@ -4,15 +4,6 @@
 
 ---
 
-You may be looking for:
-
-- [An overview of Serde](https://serde.rs/)
-- [Data formats supported by Serde](https://serde.rs/#data-formats)
-- [Setting up `#[derive(Serialize, Deserialize)]`](https://serde.rs/derive.html)
-- [Examples](https://serde.rs/examples.html)
-- [API documentation](https://docs.serde.rs/serde/)
-- [Release notes](https://github.com/serde-rs/serde/releases)
-
 ## add rsq into your project
 
 ```toml
