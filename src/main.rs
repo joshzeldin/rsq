@@ -1,6 +1,16 @@
-use rsq::{KObj, KType, open, send_sync, send_async};
+use rsq::{Kdb, KObj, KType};
 
 fn main() {
-    let mut conn = open("127.0.0.1:1234", "username", "password").unwrap();
-    println!("{:?}", send_sync(&mut conn, &KObj::Atom(KType::Symbol(String::from("variable")))));
+    let mut kdb = Kdb::new("localhost", 1234, "josh", "password");
+    println!("{:?}", kdb.send_sync(&KObj::List(vec![
+        KType::Char('t'),
+        KType::Char('i'),
+        KType::Char('l'),
+        KType::Char(' '),
+        KType::Char('1'),
+        KType::Char('0'),
+        KType::Char('0'),
+        ]
+    )));
+
 }
