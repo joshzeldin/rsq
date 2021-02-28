@@ -114,7 +114,7 @@ impl Kdb {
         let data = self.read_data(i8::from_le_bytes(msg_type));
 
         if msg_header.protocol == 1 {
-            self.send_response(& KObj::Atom(KType::Boolean(true))).unwrap();
+            self.send_response(&KObj::Atom(KType::Boolean(true))).unwrap();
         };
 
         data
@@ -139,64 +139,69 @@ impl Kdb {
         sym
     }
 
+    fn read_atom(&mut self, ktype: KType) -> KObj {
+        let vec_data = match ktype {
+            KType::Boolean(_)   => self.extract_atom(1),
+            KType::Guid(_)      => self.extract_atom(16),
+            KType::Byte(_)      => self.extract_atom(1),
+            KType::Short(_)     => self.extract_atom(2),
+            KType::Int(_)       => self.extract_atom(4),
+            KType::Long(_)      => self.extract_atom(8),
+            KType::Real(_)      => self.extract_atom(4),
+            KType::Float(_)     => self.extract_atom(8),
+            KType::Char(_)      => self.extract_atom(1),
+            KType::Symbol(_)    => self.extract_sym(),
+            KType::Timestamp(_) => self.extract_atom(8),
+            KType::Month(_)     => self.extract_atom(4),
+            KType::Date(_)      => self.extract_atom(4),
+            KType::Datetime(_)  => self.extract_atom(8),
+            KType::Timespan(_)  => self.extract_atom(8),
+            KType::Minute(_)    => self.extract_atom(4),
+            KType::Second(_)    => self.extract_atom(4),
+            KType::Time(_)      => self.extract_atom(4),
+        };
+        KObj::Atom(ktype).deserialize(&vec_data)
+    }
+
+    fn read_uniform_list(&mut self, msg_type: i8, len: u32) -> KObj {
+        let mut list = vec![];
+        for _ in 0..len {
+            let data = self.read_data(-1 * msg_type);
+            list.push(data);
+        };  
+        KObj::List(list)
+    }
+
+    fn read_generic_list(&mut self, len:u32) -> KObj {
+        let mut list = vec![];
+        for _ in 0..len{
+            let mut msg_type = [0;1];
+            self.stream().read(&mut msg_type).unwrap();
+            let msg_code = i8::from_le_bytes(msg_type);
+            list.push(self.read_data(msg_code));
+        };  
+        KObj::List(list)
+    }  
+
+    fn read_list(&mut self, msg_type: i8) -> KObj {
+        let mut attr = [0;1];
+        self.stream().read(&mut attr).unwrap(); // throw away attribute for now
+        let mut len = [0;4];                     // extract vector length
+        self.stream().read(&mut len).unwrap();
+        let len = u32::from_le_bytes(len);
+        if msg_type == 0 {
+            self.read_generic_list(len)
+        } else {
+            self.read_uniform_list(msg_type, len)
+        }
+    }
+
     fn read_data(&mut self, msg_type: i8) -> KObj {
         let mut kobj = KObj::new(msg_type);
-        kobj = match &kobj {
-            KObj::Atom(k) => {
-                let buffer = match k {
-                    KType::Boolean(_)   => self.extract_atom(1),
-                    KType::Guid(_)      => self.extract_atom(16),
-                    KType::Byte(_)      => self.extract_atom(1),
-                    KType::Short(_)     => self.extract_atom(2),
-                    KType::Int(_)       => self.extract_atom(4),
-                    KType::Long(_)      => self.extract_atom(8),
-                    KType::Real(_)      => self.extract_atom(4),
-                    KType::Float(_)     => self.extract_atom(8),
-                    KType::Char(_)      => self.extract_atom(1),
-                    KType::Symbol(_)    => self.extract_sym(),
-                    KType::Timestamp(_) => self.extract_atom(8),
-                    KType::Month(_)     => self.extract_atom(4),
-                    KType::Date(_)      => self.extract_atom(4),
-                    KType::Datetime(_)  => self.extract_atom(8),
-                    KType::Timespan(_)  => self.extract_atom(8),
-                    KType::Minute(_)    => self.extract_atom(4),
-                    KType::Second(_)    => self.extract_atom(4),
-                    KType::Time(_)      => self.extract_atom(4),
-                    KType::Other        => self.extract_atom(1),
-                };
-                kobj.deserialize(&buffer)
-            }
-            KObj::List(_) => {
-                self.stream().read(&mut [0;1]).unwrap(); // throw away attribute for now
-                let mut len = [0;4];                     // extract vector length
-                self.stream().read(&mut len).unwrap();
-                let mut list = vec![];
-                if msg_type == 0 {
-                    let mut msg_type = [0;1];
-                    for _ in 0..u32::from_le_bytes(len){
-                        self.stream().read(&mut msg_type).unwrap();
-                        let msg_type = i8::from_le_bytes(msg_type);
-                        match self.read_data(msg_type){
-                            KObj::Atom(d) => list.push(KObj::Atom(d)),
-                            KObj::List(_) => {
-                                list.push(self.read_data(msg_type))
-                            },
-                        };
-                    };  
-                    KObj::List(list)
-                } else {
-                    for _ in 0..u32::from_le_bytes(len){
-                        match self.read_data(-1 * msg_type){
-                            KObj::Atom(d) => list.push(KObj::Atom(d)),
-                            _ => {},
-                        };
-                    };  
-                    KObj::List(list)
-                }
-            },
-            _ => KObj::List(vec![]),
+        kobj = match kobj {
+            KObj::Atom(k) => self.read_atom(k),
+            KObj::List(_) => self.read_list(msg_type)
         };
-        println!("{:?}", kobj);
         kobj
     }
 
@@ -256,7 +261,6 @@ pub enum KType {
     Minute(DateTime<Utc>),
     Second(DateTime<Utc>),
     Time(DateTime<Utc>),
-    Other,
 }
 
 #[derive(Debug)]
@@ -308,7 +312,11 @@ impl KType {
                 KType::Timestamp(DateTime::<Utc>::from_utc(
                     NaiveDateTime::from_timestamp(dt / 1_000_000_000, (dt % 1_000_000_000) as u32), Utc))
             },
-            // KType::Month(n) => vec![0;4],
+            KType::Month(_) => {
+                let dt = LittleEndian::read_i32(data) * 30 + 730119;
+                KType::Date(Date::<Utc>::from_utc(
+                    NaiveDate::from_num_days_from_ce(dt), Utc))
+            },
             KType::Date(_) => {
                 let dt = LittleEndian::read_i32(data) + 730119;
                 KType::Date(Date::<Utc>::from_utc(
@@ -338,8 +346,7 @@ impl KType {
                 let s = LittleEndian::read_i32(data);
                 KType::Time(DateTime::<Utc>::from_utc(
                     NaiveDateTime::from_timestamp((s / 1000) as i64, 1_000_000*(s % 1_000) as u32), Utc))
-            },  
-            _ => KType::Other,
+            }
         }
     }
 
@@ -392,7 +399,7 @@ impl KObj {
             -17 => KObj::Atom(KType::Minute(Utc::now())),
             -18 => KObj::Atom(KType::Second(Utc::now())),
             -19 => KObj::Atom(KType::Time(Utc::now())),
-            _ => KObj::Atom(KType::Other),
+            _ => panic!["unrecognized type code"]
         }
     }
 
