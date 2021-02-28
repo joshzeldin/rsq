@@ -1,7 +1,7 @@
-use std::net::{ TcpStream, ToSocketAddrs};
+use std::net::{ TcpStream};
 use std::io::prelude::*;
-use std::io::{Error, ErrorKind};
-use byteorder::{ByteOrder, BigEndian, LittleEndian, WriteBytesExt};
+use std::io::{Error};
+use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
 use uuid::Uuid;
 use chrono::{Date, DateTime, Utc, NaiveDateTime, NaiveDate, Datelike};
 
@@ -96,21 +96,29 @@ impl Kdb {
         data_bytes.splice(0..0, type_bytes.iter().cloned());
         data_bytes.splice(0..0, size_bytes.iter().cloned());
         data_bytes.splice(0..0, header_bytes);
-        println!("Bytes: {:?}", data_bytes);
         self.stream().write(&data_bytes).unwrap();
         self.stream().flush().unwrap();
         Ok(())
     }
 
     pub fn read(&mut self) -> KObj {
+        if self.stream.is_none() {
+            self.open().unwrap();
+        };
         let msg_header = Header::read(self);
         let mut stream = self.stream();
 
 
         let mut msg_type = [0;1];
         stream.read(&mut msg_type).unwrap();
+        let data = self.read_data(i8::from_le_bytes(msg_type));
 
-        self.read_data(i8::from_le_bytes(msg_type))
+        if msg_header.protocol == 1 {
+            self.send_response(& KObj::Atom(KType::Boolean(true))).unwrap();
+        };
+
+        data
+
     }
 
     fn extract_atom(&mut self, len: usize) -> Vec<u8> {
@@ -132,8 +140,8 @@ impl Kdb {
     }
 
     fn read_data(&mut self, msg_type: i8) -> KObj {
-        let kobj = KObj::new(msg_type);
-        match &kobj {
+        let mut kobj = KObj::new(msg_type);
+        kobj = match &kobj {
             KObj::Atom(k) => {
                 let buffer = match k {
                     KType::Boolean(_)   => self.extract_atom(1),
@@ -160,19 +168,36 @@ impl Kdb {
             }
             KObj::List(_) => {
                 self.stream().read(&mut [0;1]).unwrap(); // throw away attribute for now
-                let mut len = [0;4];
+                let mut len = [0;4];                     // extract vector length
                 self.stream().read(&mut len).unwrap();
                 let mut list = vec![];
-                for i in 0..u32::from_le_bytes(len){
-                    match self.read_data(-1 * msg_type){
-                        KObj::Atom(d) => list.push(d),
-                        _ => {},
-                    };
-                };  
-                KObj::List(list)
+                if msg_type == 0 {
+                    let mut msg_type = [0;1];
+                    for _ in 0..u32::from_le_bytes(len){
+                        self.stream().read(&mut msg_type).unwrap();
+                        let msg_type = i8::from_le_bytes(msg_type);
+                        match self.read_data(msg_type){
+                            KObj::Atom(d) => list.push(KObj::Atom(d)),
+                            KObj::List(_) => {
+                                list.push(self.read_data(msg_type))
+                            },
+                        };
+                    };  
+                    KObj::List(list)
+                } else {
+                    for _ in 0..u32::from_le_bytes(len){
+                        match self.read_data(-1 * msg_type){
+                            KObj::Atom(d) => list.push(KObj::Atom(d)),
+                            _ => {},
+                        };
+                    };  
+                    KObj::List(list)
+                }
             },
             _ => KObj::List(vec![]),
-        }
+        };
+        println!("{:?}", kobj);
+        kobj
     }
 
     pub fn send_sync(&mut self, data: &KObj) -> Result<KObj, Error> {
@@ -187,11 +212,27 @@ impl Kdb {
         data_bytes.splice(0..0, type_bytes.iter().cloned());
         data_bytes.splice(0..0, size_bytes.iter().cloned());
         data_bytes.splice(0..0, header_bytes);
-        println!("Bytes: {:?}", data_bytes);
         self.stream().write(&data_bytes).unwrap();
         self.stream().flush().unwrap();    
         let response = self.read();
         Ok(response)
+    }
+
+    pub fn send_response(&mut self, data: &KObj) -> Result<(), Error> {
+        if self.stream.is_none() {
+            self.open()?;
+        };
+        let header_bytes = [1, 2, 0, 0].iter().cloned();
+        let mut data_bytes = data.serialize().clone();
+        let type_bytes = [data.type_as_bytes()];
+        let mut size_bytes = vec![];
+        size_bytes.write_i32::<LittleEndian>((4 + header_bytes.len() + data_bytes.len() + type_bytes.len()) as i32).unwrap();
+        data_bytes.splice(0..0, type_bytes.iter().cloned());
+        data_bytes.splice(0..0, size_bytes.iter().cloned());
+        data_bytes.splice(0..0, header_bytes);
+        self.stream().write(&data_bytes).unwrap();
+        self.stream().flush().unwrap();    
+        Ok(())
     }
 }
 
@@ -221,7 +262,7 @@ pub enum KType {
 #[derive(Debug)]
 pub enum KObj {
     Atom(KType),
-    List(Vec<KType>)
+    List(Vec<KObj>)
 }
 
 impl KType {
@@ -385,7 +426,12 @@ impl KObj {
             KObj::Atom(t) => t.type_as_code() as u8,
             // todo: support generic lists
             // assumes all lists are of the type of the first element
-            KObj::List(t) => (-1 * t[0].type_as_code()) as u8,
+            KObj::List(t) => {
+                match &t[0] {
+                    KObj::Atom(t) => (-1 * t.type_as_code()) as u8,
+                    KObj::List(_) => 0 as u8,
+                }
+            }
         };
         code as u8
     }
@@ -393,13 +439,7 @@ impl KObj {
     fn deserialize(&self, data: &Vec<u8>) -> KObj{
         match self {
             KObj::Atom(t) => KObj::Atom(t.deserialize(data)),
-            KObj::List(t) => {
-                let mut s = vec![];
-                for a in t.iter(){
-                    s.push(a.serialize());
-                }
-                KObj::List(vec![])
-            }
+            KObj::List(_) => KObj::List(vec![]),  // this will never get used
         }
     }
 }
