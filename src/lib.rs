@@ -1,6 +1,7 @@
 use std::net::{ TcpStream};
 use std::io::prelude::*;
 use std::io::{Error};
+use std::fmt;
 use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
 use uuid::Uuid;
 use chrono::{Date, DateTime, Utc, NaiveDateTime, NaiveDate, Datelike};
@@ -56,6 +57,15 @@ impl Header {
 }
 
 impl Kdb {
+    /// ```no_run
+    /// use rsq::{Kdb, KObj, KType};
+    /// let mut kdb = Kdb::new("localhost", 5001, "username", "password");
+    /// kdb.send_async(&KObj::List(vec![
+    ///     KObj::Atom(KType::Symbol("upd".to_string())),
+    ///     KObj::Atom(KType::Symbol("trade".to_string())),
+    ///     KObj::Atom(KType::Symbol("".to_string()))
+    /// ])).unwrap();
+    /// ```
     pub fn new(host: &str, port: u16, user: &str, pass: &str) -> Kdb {
         Kdb {
             host: host.to_string(),
@@ -196,11 +206,70 @@ impl Kdb {
         }
     }
 
+    fn read_dict(&mut self) -> KObj {
+
+        let mut key_type = [0;1];
+        self.stream().read(&mut key_type).unwrap();
+        let key_type = i8::from_le_bytes(key_type);
+
+        let keys = self.read_data(key_type);
+
+        let mut val_type = [0;1];
+        self.stream().read(&mut val_type).unwrap();
+        let val_type = i8::from_le_bytes(val_type);
+        let vals = self.read_data(val_type);
+
+        let keys: Vec<KObj> = match keys {
+             KObj::List(k) => k,
+            _ => panic!["keys of dictionary must be a list"] // this shouldn't happen
+        };
+
+        let vals = match vals {
+            KObj::List(k) => k,
+           _ => panic!["keys of dictionary must be a list"] // this shouldn't happen
+        };
+        
+        KObj::Dict(keys, vals)
+        
+    }
+
+    fn read_table(&mut self) -> KObj {
+
+        let mut key_type = [0;1];
+        self.stream().read(&mut key_type).unwrap();
+        let key_type = i8::from_le_bytes(key_type);
+
+        let keys = self.read_data(key_type);
+
+        let mut val_type = [0;1];
+        self.stream().read(&mut val_type).unwrap();
+        let val_type = i8::from_le_bytes(val_type);
+        let vals = self.read_data(val_type);
+
+        let keys: Vec<KObj> = match keys {
+             KObj::List(k) => k,
+            _ => panic!["keys of dictionary must be a list"] // this shouldn't happen
+        };
+
+        let vals = match vals {
+            KObj::List(k) => k,
+           _ => panic!["keys of dictionary must be a list"] // this shouldn't happen
+        };
+        
+        KObj::Table(keys, vals)
+        
+    }
+
     fn read_data(&mut self, msg_type: i8) -> KObj {
         let mut kobj = KObj::new(msg_type);
         kobj = match kobj {
             KObj::Atom(k) => self.read_atom(k),
-            KObj::List(_) => self.read_list(msg_type)
+            KObj::List(_) => self.read_list(msg_type),
+            KObj::Dict(_,_) => self.read_dict(),
+            KObj::Table(_,_) => {
+                self.stream().read(&mut[0;2]);
+                self.read_table()
+            }
         };
         kobj
     }
@@ -266,7 +335,72 @@ pub enum KType {
 #[derive(Debug)]
 pub enum KObj {
     Atom(KType),
-    List(Vec<KObj>)
+    List(Vec<KObj>),
+    Dict(Vec<KObj>, Vec<KObj>),
+    Table(Vec<KObj>, Vec<KObj>)
+}
+
+impl fmt::Display for KObj {
+    fn fmt(&self, f:&mut fmt::Formatter) -> fmt::Result {
+        match self {
+            KObj::Atom(k) => k.fmt(f),
+            KObj::List(k) => {
+                let list: Vec<String> = k.iter().map(|x|format!("{}", x)).collect();
+                let needs_enlist = if 1 == list.len(){
+                    String::from("enlist ")
+                } else {
+                    String::from("")
+                };
+                let string_list = String::from("(") + &needs_enlist + &list.join(";") + ")";
+                write!(f, "{}", string_list);
+                Ok(())
+            },
+            KObj::Dict(k,v) => {
+                let keys: Vec<String> = k.iter().map(|x|format!("{}", x)).collect();
+                let keys = String::from("(") + &keys.join(";") + ")";
+                write!(f, "{}!", keys);
+                let vals: Vec<String> = v.iter().map(|x|format!("{}", x)).collect();
+                let vals = String::from("(") + &vals.join(";") + ")";
+                write!(f, "{}", vals);
+                Ok(())
+            },
+            KObj::Table(k,v) => {
+                let keys: Vec<String> = k.iter().map(|x|format!("{}", x)).collect();
+                let keys = String::from("(") + &keys.join(";") + ")";
+                write!(f, "flip {}!", keys);
+                let vals: Vec<String> = v.iter().map(|x|format!("{}", x)).collect();
+                let vals = String::from("(") + &vals.join(";") + ")";
+                write!(f, "{}", vals);
+                Ok(())
+            }
+        }
+    }
+}
+
+impl fmt::Display for KType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            KType::Boolean(k)   => {write!(f, "{}b", if *k {1} else {0})},
+            KType::Guid(k)      => write!(f, "\"G\"$\"{}\"",k),
+            KType::Byte(k)      => write!(f, "{}",k),
+            KType::Short(k)     => write!(f, "{}h",k),
+            KType::Int(k)       => write!(f, "{}i",k),
+            KType::Long(k)      => write!(f, "{}j",k),
+            KType::Real(k)      => write!(f, "{}e",k),
+            KType::Float(k)     => write!(f, "{}f",k),
+            KType::Char(k)      => write!(f, "{}",k),
+            KType::Symbol(k)    => write!(f, "`{}",k),
+            KType::Timestamp(k) => write!(f, "{}", k.format("%Y.%m.%dD%H:%M:%S.%f")),
+            KType::Month(k)     => write!(f, "{}", k.format("%Y.%mm")),
+            KType::Date(k)      => write!(f, "{}", k.format("%Y.%m.%d")),
+            KType::Datetime(k)  => write!(f, "{}", k.format("%Y.%m.%dT%H:%M:%S%.3f")),
+            //todo: fix this to handle date offsets
+            KType::Timespan(k)  => write!(f, "{}", k.format("0D%H:%M:%S.%f")),
+            KType::Minute(k)    => write!(f, "{}", k.format("%H:%M")),
+            KType::Second(k)    => write!(f, "{}", k.format("%H:%M:%S")),
+            KType::Time(k)      => write!(f, "{}", k.format("%H:%M:%S%.3f")),
+        }
+    }
 }
 
 impl KType {
@@ -291,7 +425,6 @@ impl KType {
             KType::Minute(n) => {buf.write_i64::<LittleEndian>(n.timestamp_nanos() - 94668480000000000).unwrap(); buf},
             KType::Second(n) => {buf.write_i64::<LittleEndian>(n.timestamp_nanos() - 94668480000000000).unwrap(); buf},
             KType::Time(n) => {buf.write_i64::<LittleEndian>(n.timestamp_nanos() - 94668480000000000).unwrap(); buf},
-            _ => vec![0]
         }
     }
 
@@ -370,7 +503,6 @@ impl KType {
             KType::Minute(_)    => -17,
             KType::Second(_)    => -18,
             KType::Time(_)      => -19,
-            _ => 0
         }
     }
 }
@@ -399,6 +531,8 @@ impl KObj {
             -17 => KObj::Atom(KType::Minute(Utc::now())),
             -18 => KObj::Atom(KType::Second(Utc::now())),
             -19 => KObj::Atom(KType::Time(Utc::now())),
+             99 => KObj::Dict(vec![], vec![]),
+             98 => KObj::Table(vec![], vec![]),
             _ => panic!["unrecognized type code"]
         }
     }
@@ -424,7 +558,9 @@ impl KObj {
                     };
                 };
                 result
-            }
+            },
+            KObj::Dict(_,_) => vec![],
+            KObj::Table(_,_) => vec![]
         }
     }
 
@@ -437,8 +573,12 @@ impl KObj {
                 match &t[0] {
                     KObj::Atom(t) => (-1 * t.type_as_code()) as u8,
                     KObj::List(_) => 0 as u8,
+                    KObj::Dict(_,_) => 0 as u8,
+                    KObj::Table(_,_) => 0 as u8
                 }
-            }
+            },
+            KObj::Dict(_,_) => 99u8,
+            KObj::Table(_,_) => 98u8
         };
         code as u8
     }
@@ -446,7 +586,7 @@ impl KObj {
     fn deserialize(&self, data: &Vec<u8>) -> KObj{
         match self {
             KObj::Atom(t) => KObj::Atom(t.deserialize(data)),
-            KObj::List(_) => KObj::List(vec![]),  // this will never get used
+            _             => KObj::List(vec![]),  // this will never get used
         }
     }
 }
