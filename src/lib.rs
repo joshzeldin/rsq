@@ -221,12 +221,12 @@ impl Kdb {
 
         let keys: Vec<KObj> = match keys {
              KObj::List(k) => k,
-            _ => panic!["keys of dictionary must be a list"] // this shouldn't happen
+            _ => return KObj::Error("keys of dictionary must be a list".to_string()) // this shouldn't happen
         };
 
         let vals = match vals {
             KObj::List(k) => k,
-           _ => panic!["keys of dictionary must be a list"] // this shouldn't happen
+           _ => return KObj::Error("keys of dictionary must be a list".to_string()) // this shouldn't happen
         };
         
         KObj::Dict(keys, vals)
@@ -248,16 +248,21 @@ impl Kdb {
 
         let keys: Vec<KObj> = match keys {
              KObj::List(k) => k,
-            _ => panic!["keys of dictionary must be a list"] // this shouldn't happen
+            _ => return KObj::Error("keys of dictionary must be a list".to_string()) // this shouldn't happen
         };
 
         let vals = match vals {
             KObj::List(k) => k,
-           _ => panic!["keys of dictionary must be a list"] // this shouldn't happen
+           _ => return KObj::Error("keys of dictionary must be a list".to_string()) // this shouldn't happen
         };
         
         KObj::Table(keys, vals)
-        
+     
+    }
+
+    fn read_error(&mut self) -> KObj {
+        let error_msg = self.extract_sym();
+        KObj::Error(String::from_utf8(error_msg.to_vec()).unwrap())
     }
 
     fn read_data(&mut self, msg_type: i8) -> KObj {
@@ -267,8 +272,11 @@ impl Kdb {
             KObj::List(_) => self.read_list(msg_type),
             KObj::Dict(_,_) => self.read_dict(),
             KObj::Table(_,_) => {
-                self.stream().read(&mut[0;2]);
+                self.stream().read(&mut[0;2]).unwrap();
                 self.read_table()
+            },
+            KObj::Error(_) => {
+                self.read_error()
             }
         };
         kobj
@@ -337,7 +345,8 @@ pub enum KObj {
     Atom(KType),
     List(Vec<KObj>),
     Dict(Vec<KObj>, Vec<KObj>),
-    Table(Vec<KObj>, Vec<KObj>)
+    Table(Vec<KObj>, Vec<KObj>),
+    Error(String)
 }
 
 impl fmt::Display for KObj {
@@ -372,6 +381,10 @@ impl fmt::Display for KObj {
                 let vals = String::from("(") + &vals.join(";") + ")";
                 write!(f, "{}", vals);
                 Ok(())
+            },
+            KObj::Error(e) => {
+                write!(f, "'{}", e);
+                Ok(())
             }
         }
     }
@@ -388,7 +401,7 @@ impl fmt::Display for KType {
             KType::Long(k)      => write!(f, "{}j",k),
             KType::Real(k)      => write!(f, "{}e",k),
             KType::Float(k)     => write!(f, "{}f",k),
-            KType::Char(k)      => write!(f, "{}",k),
+            KType::Char(k)      => write!(f, "\"{}\"",k),
             KType::Symbol(k)    => write!(f, "`{}",k),
             KType::Timestamp(k) => write!(f, "{}", k.format("%Y.%m.%dD%H:%M:%S.%f")),
             KType::Month(k)     => write!(f, "{}", k.format("%Y.%mm")),
@@ -533,7 +546,8 @@ impl KObj {
             -19 => KObj::Atom(KType::Time(Utc::now())),
              99 => KObj::Dict(vec![], vec![]),
              98 => KObj::Table(vec![], vec![]),
-            _ => panic!["unrecognized type code"]
+           -128 => KObj::Error(String::from("")),
+              _ => KObj::Error(String::from(""))
         }
     }
 
@@ -560,7 +574,8 @@ impl KObj {
                 result
             },
             KObj::Dict(_,_) => vec![],
-            KObj::Table(_,_) => vec![]
+            KObj::Table(_,_) => vec![],
+            KObj::Error(_) => vec![]
         }
     }
 
@@ -572,13 +587,16 @@ impl KObj {
             KObj::List(t) => {
                 match &t[0] {
                     KObj::Atom(t) => (-1 * t.type_as_code()) as u8,
-                    KObj::List(_) => 0 as u8,
-                    KObj::Dict(_,_) => 0 as u8,
-                    KObj::Table(_,_) => 0 as u8
+                    KObj::List(_) => 0u8,
+                    KObj::Dict(_,_) => 0u8,
+                    KObj::Table(_,_) => 0u8,
+                    // should never occur
+                    KObj::Error(_) => 0u8
                 }
             },
             KObj::Dict(_,_) => 99u8,
-            KObj::Table(_,_) => 98u8
+            KObj::Table(_,_) => 98u8,
+            KObj::Error(_) =>  0u8
         };
         code as u8
     }
