@@ -270,6 +270,7 @@ impl Kdb {
         kobj = match kobj {
             KObj::Atom(k) => self.read_atom(k),
             KObj::List(_) => self.read_list(msg_type),
+            KObj::GenericList(_) => self.read_list(msg_type),
             KObj::Dict(_,_) => self.read_dict(),
             KObj::Table(_,_) => {
                 self.stream().read(&mut[0;2]).unwrap();
@@ -344,6 +345,7 @@ pub enum KType {
 pub enum KObj {
     Atom(KType),
     List(Vec<KObj>),
+    GenericList(Vec<KObj>),
     Dict(Vec<KObj>, Vec<KObj>),
     Table(Vec<KObj>, Vec<KObj>),
     Error(String)
@@ -354,6 +356,17 @@ impl fmt::Display for KObj {
         match self {
             KObj::Atom(k) => k.fmt(f),
             KObj::List(k) => {
+                let list: Vec<String> = k.iter().map(|x|format!("{}", x)).collect();
+                let needs_enlist = if 1 == list.len(){
+                    String::from("enlist ")
+                } else {
+                    String::from("")
+                };
+                let string_list = String::from("(") + &needs_enlist + &list.join(";") + ")";
+                write!(f, "{}", string_list);
+                Ok(())
+            },
+            KObj::GenericList(k) => {
                 let list: Vec<String> = k.iter().map(|x|format!("{}", x)).collect();
                 let needs_enlist = if 1 == list.len(){
                     String::from("enlist ")
@@ -525,7 +538,8 @@ impl KObj {
 
     pub fn new(code: i8) -> KObj {
         match code {
-            code if code >= 0 && code <= 19 => KObj::List(vec![]),
+            code if code > 0 && code <= 19 => KObj::List(vec![]),
+             00 => KObj::GenericList(vec![]),
             -01 => KObj::Atom(KType::Boolean(false)),
             -02 => KObj::Atom(KType::Guid(Uuid::nil())),
             -04 => KObj::Atom(KType::Byte(0)),
@@ -573,6 +587,26 @@ impl KObj {
                 };
                 result
             },
+            KObj::GenericList(t) => {
+                let mut result = vec![];
+                // 1 byte for attribute
+                result.push(0);
+
+                // 4 bytes for length
+                let mut length_buf = vec![]; 
+                length_buf.write_i32::<LittleEndian>(t.len() as i32).unwrap();
+                for b in length_buf.iter(){
+                    result.push(*b);
+                };
+                // ? bytes for data
+                for k in t.iter() {
+                    result.push(k.type_as_bytes());
+                    for byte in k.serialize(){
+                        result.push(byte);
+                    };
+                };
+                result
+            },
             KObj::Dict(_,_) => vec![],
             KObj::Table(_,_) => vec![],
             KObj::Error(_) => vec![]
@@ -591,9 +625,11 @@ impl KObj {
                     KObj::Dict(_,_) => 0u8,
                     KObj::Table(_,_) => 0u8,
                     // should never occur
+                    KObj::GenericList(_) => 0u8,
                     KObj::Error(_) => 0u8
                 }
             },
+            KObj::GenericList(_) => 0u8,
             KObj::Dict(_,_) => 99u8,
             KObj::Table(_,_) => 98u8,
             KObj::Error(_) =>  0u8
