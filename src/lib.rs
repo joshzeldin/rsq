@@ -61,7 +61,7 @@ use std::io::{Error};
 use std::fmt;
 use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
 use uuid::Uuid;
-use chrono::{Date, DateTime, Utc, NaiveDateTime, NaiveDate, Datelike};
+use chrono::{Date, DateTime, Utc, NaiveDateTime, NaiveDate, Datelike, Timelike};
 
 pub struct Kdb {
     host: String,
@@ -482,24 +482,24 @@ impl KType {
     fn serialize(&self) -> Vec<u8> {
         let mut buf: Vec<u8> = vec![];
         match self  {
-            KType::Boolean(n) => vec![*n as u8],
-            KType::Guid(n) => n.as_bytes().iter().cloned().collect(),
-            KType::Byte(n) => vec![*n as u8],
-            KType::Short(n) => {buf.write_i16::<LittleEndian>(*n).unwrap(); buf},
-            KType::Int(n) => {buf.write_i32::<LittleEndian>(*n).unwrap(); buf},
-            KType::Long(n) => {buf.write_i64::<LittleEndian>(*n).unwrap(); buf},
-            KType::Real(n) => {buf.write_f32::<LittleEndian>(*n).unwrap(); buf},
-            KType::Float(n) => {buf.write_f64::<LittleEndian>(*n).unwrap(); buf},
-            KType::Char(n) => vec![*n as u8],
-            KType::Symbol(n) => {let mut sym = Vec::from(n.as_bytes());sym.push(0);sym},
-            KType::Timestamp(n) => {buf.write_i64::<LittleEndian>(n.timestamp_nanos() - 94668480000000000).unwrap(); buf},
-            KType::Month(n) => {buf.write_i32::<LittleEndian>(n.num_days_from_ce() - 730119).unwrap(); buf},
-            KType::Date(n) => {buf.write_i32::<LittleEndian>(n.num_days_from_ce() - 730119).unwrap(); buf},
-            KType::Datetime(n) => {buf.write_i64::<LittleEndian>(n.timestamp_nanos() - 94668480000000000).unwrap(); buf},
-            KType::Timespan(n) => {buf.write_i64::<LittleEndian>(n.timestamp_nanos() - 94668480000000000).unwrap(); buf},
-            KType::Minute(n) => {buf.write_i64::<LittleEndian>(n.timestamp_nanos() - 94668480000000000).unwrap(); buf},
-            KType::Second(n) => {buf.write_i64::<LittleEndian>(n.timestamp_nanos() - 94668480000000000).unwrap(); buf},
-            KType::Time(n) => {buf.write_i64::<LittleEndian>(n.timestamp_nanos() - 94668480000000000).unwrap(); buf},
+            KType::Boolean(n)   => vec![*n as u8],
+            KType::Guid(n)      => n.as_bytes().iter().cloned().collect(),
+            KType::Byte(n)      => vec![*n as u8],
+            KType::Short(n)     => {buf.write_i16::<LittleEndian>(*n).unwrap(); buf},
+            KType::Int(n)       => {buf.write_i32::<LittleEndian>(*n).unwrap(); buf},
+            KType::Long(n)      => {buf.write_i64::<LittleEndian>(*n).unwrap(); buf},
+            KType::Real(n)      => {buf.write_f32::<LittleEndian>(*n).unwrap(); buf},
+            KType::Float(n)     => {buf.write_f64::<LittleEndian>(*n).unwrap(); buf},
+            KType::Char(n)      => vec![*n as u8],
+            KType::Symbol(n)    => {let mut sym = Vec::from(n.as_bytes());sym.push(0);sym},
+            KType::Timestamp(n) => {buf.write_i64::<LittleEndian>(n.timestamp_nanos() - 946684800000000000).unwrap(); buf},
+            KType::Month(n)     => {buf.write_i32::<LittleEndian>(n.num_days_from_ce() - 730119).unwrap(); buf},
+            KType::Date(n)      => {buf.write_i32::<LittleEndian>(n.num_days_from_ce() - 730119).unwrap(); buf},
+            KType::Datetime(n)  => {buf.write_i64::<LittleEndian>(n.timestamp_nanos() - 946684800000000000).unwrap(); buf},
+            KType::Timespan(n)  => {buf.write_i64::<LittleEndian>(n.timestamp_nanos() - 946684800000000000).unwrap(); buf},
+            KType::Minute(n)    => {buf.write_i64::<LittleEndian>(n.timestamp_nanos() - 946684800000000000).unwrap(); buf},
+            KType::Second(n)    => {buf.write_i64::<LittleEndian>(n.timestamp_nanos() - 946684800000000000).unwrap(); buf},
+            KType::Time(n)      => {buf.write_i32::<LittleEndian>((n.time().num_seconds_from_midnight() * 1000 + n.time().nanosecond() / 1_000_000) as i32).unwrap();buf},
         }
     }
 
@@ -670,12 +670,7 @@ impl KObj {
             KObj::List(t) => {
                 match &t[0] {
                     KObj::Atom(t) => (-1 * t.type_as_code()) as u8,
-                    KObj::List(_) => 0u8,
-                    KObj::Dict(_,_) => 0u8,
-                    KObj::Table(_,_) => 0u8,
-                    // should never occur
-                    KObj::GenericList(_) => 0u8,
-                    KObj::Error(_) => 0u8
+                    _ => 0u8,
                 }
             },
             KObj::GenericList(_) => 0u8,
