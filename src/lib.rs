@@ -56,8 +56,9 @@
 //! (`upd;`trade;flip (`time;`sym;`price;`size)!((enlist 20:59:30.000);(enlist `TSLA);(enlist 653.1f);(enlist 100j)))
 //! ```
 use std::net::{ TcpStream};
+use std::io::{BufReader, BufWriter};
 use std::io::prelude::*;
-use std::io::{Error};
+use std::io::{Error, Write};
 use std::fmt;
 use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
 use uuid::Uuid;
@@ -68,7 +69,8 @@ pub struct Kdb {
     port: u16,
     user: String,
     pass: String,
-    stream: Option<TcpStream>,
+    reader: Option<BufReader<TcpStream>>,
+    writer: Option<BufWriter<TcpStream>>
 }
 
 struct Header {
@@ -77,7 +79,7 @@ struct Header {
     length: u32,
 }
 
-enum Endian {
+pub enum Endian {
     Big,
     Little
 }
@@ -85,7 +87,7 @@ enum Endian {
 impl Header {
     fn read(kdb: &mut Kdb) -> Header {
 
-        let mut stream = kdb.stream.as_ref().unwrap();
+        let stream = kdb.reader();
         let mut endian = [0;1];
         let mut protocol = [0;1]; 
         let mut msg_length = [0;4];
@@ -121,7 +123,8 @@ impl Kdb {
             port,
             user: user.to_string(),
             pass: pass.to_string(),
-            stream: None,
+            reader: None,
+            writer: None
         }
     }
 
@@ -130,46 +133,55 @@ impl Kdb {
         let response = format!("{}:{}{}",self.user, self.pass, "\x06\x00");
         stream.write(response.as_bytes())?;
         stream.read(&mut [0; 1])?;
-        self.stream = Some(stream);
+        self.reader = Some(BufReader::new(stream.try_clone()?));
+        self.writer = Some(BufWriter::new(stream));
         Ok(())
     }
 
-    pub fn stream(&mut self) -> &TcpStream {
-        self.stream.as_ref().unwrap()
+    pub fn reader(&mut self) -> &mut BufReader<TcpStream> {
+        self.reader.as_mut().unwrap()
+    }
+
+    pub fn writer(&mut self) -> &mut BufWriter<TcpStream> {
+        self.writer.as_mut().unwrap()
     }
 
     pub fn close(&mut self) -> Result<(), Error> {
-        self.stream = None;
+        self.reader = None;
+        self.writer = None;
         Ok(())
     }
 
     pub fn send_async(&mut self, data: &KObj) -> Result<(), Error> {
-        if self.stream.is_none() {
+        if self.writer.is_none() {
             self.open()?;
         };
-        let header_bytes = [1, 0, 0, 0].iter().cloned();
-        let mut data_bytes = data.serialize().clone();
-        let type_bytes = [data.type_as_bytes()];
+        let header_bytes = vec![1, 0, 0, 0];
+        let mut data_bytes = data.serialize();
+        let type_bytes = vec![data.type_as_bytes()];
         let mut size_bytes = vec![];
-        size_bytes.write_i32::<LittleEndian>((4 + header_bytes.len() + data_bytes.len() + type_bytes.len()) as i32).unwrap();
-        data_bytes.splice(0..0, type_bytes.iter().cloned());
-        data_bytes.splice(0..0, size_bytes.iter().cloned());
+        size_bytes.write_i32::<LittleEndian>((4 + header_bytes.len() + data_bytes.len() + type_bytes.len()) as i32)?;
+        data_bytes.splice(0..0, type_bytes);
+        data_bytes.splice(0..0, size_bytes);
         data_bytes.splice(0..0, header_bytes);
-        self.stream().write(&data_bytes).unwrap();
-        self.stream().flush().unwrap();
+        let writer = self.writer();
+        writer.write(&data_bytes)?;
         Ok(())
     }
 
     pub fn read(&mut self) -> KObj {
-        if self.stream.is_none() {
-            self.open().unwrap();
+        if self.reader.is_none() {
+            match self.open() {
+                Ok(_) => {},
+                Err(e) => {return KObj::Error(format!("{}",e))}
+            };
         };
         let msg_header = Header::read(self);
-        let mut stream = self.stream();
+        let reader = self.reader();
 
 
         let mut msg_type = [0;1];
-        stream.read(&mut msg_type).unwrap();
+        reader.read(&mut msg_type).unwrap();
         let data = self.read_data(i8::from_le_bytes(msg_type));
 
         if msg_header.protocol == 1 {
@@ -182,12 +194,25 @@ impl Kdb {
 
     fn extract_atom(&mut self, len: usize) -> Vec<u8> {
         let mut vec = vec![0;len];
-        self.stream().read(&mut vec).unwrap();
+        self.reader().read(&mut vec).unwrap();
         vec
     }
 
+    fn extract_string(&mut self) -> Vec<u8> {
+        let stream = self.reader();
+        stream.read(&mut [0;1]).unwrap(); // discard attribute
+
+        let mut len = [0;4];
+        stream.read(&mut len).unwrap();
+        let len = u32::from_le_bytes(len) as usize;
+
+        let mut string = Vec::with_capacity(len);
+        stream.read(&mut string).unwrap();
+        string
+    }
+
     fn extract_sym(&mut self) -> Vec<u8> {
-        let mut stream = self.stream();
+        let stream = self.reader();
         let mut sym = vec![];
         let mut bit = [1;1];
         loop {
@@ -209,6 +234,7 @@ impl Kdb {
             KType::Real(_)      => self.extract_atom(4),
             KType::Float(_)     => self.extract_atom(8),
             KType::Char(_)      => self.extract_atom(1),
+            KType::String(_)    => self.extract_string(),
             KType::Symbol(_)    => self.extract_sym(),
             KType::Timestamp(_) => self.extract_atom(8),
             KType::Month(_)     => self.extract_atom(4),
@@ -235,7 +261,7 @@ impl Kdb {
         let mut list = vec![];
         for _ in 0..len{
             let mut msg_type = [0;1];
-            self.stream().read(&mut msg_type).unwrap();
+            self.reader().read(&mut msg_type).unwrap();
             let msg_code = i8::from_le_bytes(msg_type);
             list.push(self.read_data(msg_code));
         };  
@@ -244,9 +270,9 @@ impl Kdb {
 
     fn read_list(&mut self, msg_type: i8) -> KObj {
         let mut attr = [0;1];
-        self.stream().read(&mut attr).unwrap(); // throw away attribute for now
+        self.reader().read(&mut attr).unwrap(); // throw away attribute for now
         let mut len = [0;4];                     // extract vector length
-        self.stream().read(&mut len).unwrap();
+        self.reader().read(&mut len).unwrap();
         let len = u32::from_le_bytes(len);
         if msg_type == 0 {
             self.read_generic_list(len)
@@ -258,13 +284,13 @@ impl Kdb {
     fn read_dict(&mut self) -> KObj {
 
         let mut key_type = [0;1];
-        self.stream().read(&mut key_type).unwrap();
+        self.reader().read(&mut key_type).unwrap();
         let key_type = i8::from_le_bytes(key_type);
 
         let keys = self.read_data(key_type);
 
         let mut val_type = [0;1];
-        self.stream().read(&mut val_type).unwrap();
+        self.reader().read(&mut val_type).unwrap();
         let val_type = i8::from_le_bytes(val_type);
         let vals = self.read_data(val_type);
 
@@ -285,13 +311,13 @@ impl Kdb {
     fn read_table(&mut self) -> KObj {
 
         let mut key_type = [0;1];
-        self.stream().read(&mut key_type).unwrap();
+        self.reader().read(&mut key_type).unwrap();
         let key_type = i8::from_le_bytes(key_type);
 
         let keys = self.read_data(key_type);
 
         let mut val_type = [0;1];
-        self.stream().read(&mut val_type).unwrap();
+        self.reader().read(&mut val_type).unwrap();
         let val_type = i8::from_le_bytes(val_type);
         let vals = self.read_data(val_type);
 
@@ -322,7 +348,7 @@ impl Kdb {
             KObj::GenericList(_) => self.read_list(msg_type),
             KObj::Dict(_,_) => self.read_dict(),
             KObj::Table(_,_) => {
-                self.stream().read(&mut[0;2]).unwrap();
+                self.reader().read(&mut[0;2]).unwrap();
                 self.read_table()
             },
             KObj::Error(_) => {
@@ -333,37 +359,37 @@ impl Kdb {
     }
 
     pub fn send_sync(&mut self, data: &KObj) -> Result<KObj, Error> {
-        if self.stream.is_none() {
+        if self.writer.is_none() {
             self.open()?;
         };
-        let header_bytes = [1, 1, 0, 0].iter().cloned();
-        let mut data_bytes = data.serialize().clone();
-        let type_bytes = [data.type_as_bytes()];
+        let header_bytes = vec![1, 1, 0, 0];
+        let mut data_bytes = data.serialize();
+        let type_bytes = vec![data.type_as_bytes()];
         let mut size_bytes = vec![];
         size_bytes.write_i32::<LittleEndian>((4 + header_bytes.len() + data_bytes.len() + type_bytes.len()) as i32).unwrap();
-        data_bytes.splice(0..0, type_bytes.iter().cloned());
-        data_bytes.splice(0..0, size_bytes.iter().cloned());
+        data_bytes.splice(0..0, type_bytes);
+        data_bytes.splice(0..0, size_bytes);
         data_bytes.splice(0..0, header_bytes);
-        self.stream().write(&data_bytes).unwrap();
-        self.stream().flush().unwrap();    
+        self.writer().write(&data_bytes).unwrap();
+        self.writer().flush().unwrap();    
         let response = self.read();
         Ok(response)
     }
 
     pub fn send_response(&mut self, data: &KObj) -> Result<(), Error> {
-        if self.stream.is_none() {
+        if self.writer.is_none() {
             self.open()?;
         };
-        let header_bytes = [1, 2, 0, 0].iter().cloned();
-        let mut data_bytes = data.serialize().clone();
-        let type_bytes = [data.type_as_bytes()];
+        let header_bytes = vec![1, 2, 0, 0];
+        let mut data_bytes = data.serialize();
+        let type_bytes = vec![data.type_as_bytes()];
         let mut size_bytes = vec![];
         size_bytes.write_i32::<LittleEndian>((4 + header_bytes.len() + data_bytes.len() + type_bytes.len()) as i32).unwrap();
-        data_bytes.splice(0..0, type_bytes.iter().cloned());
-        data_bytes.splice(0..0, size_bytes.iter().cloned());
+        data_bytes.splice(0..0, type_bytes);
+        data_bytes.splice(0..0, size_bytes);
         data_bytes.splice(0..0, header_bytes);
-        self.stream().write(&data_bytes).unwrap();
-        self.stream().flush().unwrap();    
+        self.writer().write(&data_bytes).unwrap();
+        self.writer().flush().unwrap();    
         Ok(())
     }
 }
@@ -379,6 +405,7 @@ pub enum KType {
     Real(f32),
     Float(f64),
     Char(char),
+    String(String),
     Symbol(String),
     Timestamp(DateTime<Utc>),
     Month(Date<Utc>),
@@ -412,8 +439,7 @@ impl fmt::Display for KObj {
                     String::from("")
                 };
                 let string_list = String::from("(") + &needs_enlist + &list.join(";") + ")";
-                write!(f, "{}", string_list);
-                Ok(())
+                write!(f, "{}", string_list)
             },
             KObj::GenericList(k) => {
                 let list: Vec<String> = k.iter().map(|x|format!("{}", x)).collect();
@@ -423,8 +449,7 @@ impl fmt::Display for KObj {
                     String::from("")
                 };
                 let string_list = String::from("(") + &needs_enlist + &list.join(";") + ")";
-                write!(f, "{}", string_list);
-                Ok(())
+                write!(f, "{}", string_list)
             },
             KObj::Dict(k,v) => {
                 let keys: Vec<String> = k.iter().map(|x|format!("{}", x)).collect();
@@ -432,8 +457,7 @@ impl fmt::Display for KObj {
                 write!(f, "{}!", keys);
                 let vals: Vec<String> = v.iter().map(|x|format!("{}", x)).collect();
                 let vals = String::from("(") + &vals.join(";") + ")";
-                write!(f, "{}", vals);
-                Ok(())
+                write!(f, "{}", vals)
             },
             KObj::Table(k,v) => {
                 let keys: Vec<String> = k.iter().map(|x|format!("{}", x)).collect();
@@ -441,12 +465,10 @@ impl fmt::Display for KObj {
                 write!(f, "flip {}!", keys);
                 let vals: Vec<String> = v.iter().map(|x|format!("{}", x)).collect();
                 let vals = String::from("(") + &vals.join(";") + ")";
-                write!(f, "{}", vals);
-                Ok(())
+                write!(f, "{}", vals)
             },
             KObj::Error(e) => {
-                write!(f, "'{}", e);
-                Ok(())
+                write!(f, "'{}", e)
             }
         }
     }
@@ -464,6 +486,7 @@ impl fmt::Display for KType {
             KType::Real(k)      => write!(f, "{}e",k),
             KType::Float(k)     => write!(f, "{}f",k),
             KType::Char(k)      => write!(f, "\"{}\"",k),
+            KType::String(k)    => write!(f, "\"{}\"",k),
             KType::Symbol(k)    => write!(f, "`{}",k),
             KType::Timestamp(k) => write!(f, "{}", k.format("%Y.%m.%dD%H:%M:%S.%f")),
             KType::Month(k)     => write!(f, "{}", k.format("%Y.%mm")),
@@ -491,6 +514,14 @@ impl KType {
             KType::Real(n)      => {buf.write_f32::<LittleEndian>(*n).unwrap(); buf},
             KType::Float(n)     => {buf.write_f64::<LittleEndian>(*n).unwrap(); buf},
             KType::Char(n)      => vec![*n as u8],
+            KType::String(n)    => {
+                let mut string = Vec::<u8>::with_capacity(5 + n.len());
+                string.push(0);
+                buf.write_i32::<LittleEndian>(n.len() as i32).unwrap();
+                string.append(&mut buf);
+                string.append(&mut Vec::from(n.as_bytes()));
+                string
+            },
             KType::Symbol(n)    => {let mut sym = Vec::from(n.as_bytes());sym.push(0);sym},
             KType::Timestamp(n) => {buf.write_i64::<LittleEndian>(n.timestamp_nanos() - 946684800000000000).unwrap(); buf},
             KType::Month(n)     => {buf.write_i32::<LittleEndian>(n.num_days_from_ce() - 730119).unwrap(); buf},
@@ -514,6 +545,7 @@ impl KType {
             KType::Real(_)      => KType::Real(LittleEndian::read_f32(data)),
             KType::Float(_)     => KType::Float(LittleEndian::read_f64(data)),
             KType::Char(_)      => KType::Char(data[0] as char),
+            KType::String(_)    => KType::String(String::from_utf8(data.to_vec()).unwrap()),
             KType::Symbol(_)    => KType::Symbol(String::from_utf8(data.to_vec()).unwrap()),
             KType::Timestamp(_) => {
                 let dt = LittleEndian::read_i64(data) + 946684800000000000;
@@ -569,6 +601,7 @@ impl KType {
             KType::Real(_)      => -08,
             KType::Float(_)     => -09,
             KType::Char(_)      => -10,
+            KType::String(_)    =>  10,
             KType::Symbol(_)    => -11,
             KType::Timestamp(_) => -12,
             KType::Month(_)     => -13,
@@ -587,7 +620,7 @@ impl KObj {
 
     pub fn new(code: i8) -> KObj {
         match code {
-            code if code > 0 && code <= 19 => KObj::List(vec![]),
+            code if (code > 0 && code <= 19) && (code != 10) => KObj::List(vec![]),
              00 => KObj::GenericList(vec![]),
             -01 => KObj::Atom(KType::Boolean(false)),
             -02 => KObj::Atom(KType::Guid(Uuid::nil())),
@@ -598,6 +631,7 @@ impl KObj {
             -08 => KObj::Atom(KType::Real(0.)),
             -09 => KObj::Atom(KType::Float(0.)),
             -10 => KObj::Atom(KType::Char(' ')),
+             10 => KObj::Atom(KType::String(String::from(""))),
             -11 => KObj::Atom(KType::Symbol(String::from(""))),
             -12 => KObj::Atom(KType::Timestamp(Utc::now())),
             -13 => KObj::Atom(KType::Month(Utc::today())),
