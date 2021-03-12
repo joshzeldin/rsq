@@ -1,7 +1,5 @@
 use rsq::{Kdb,KObj,KType};
 use chrono::Utc;
-use std::io::{self, Read, Write};
-
 
 fn main() {
     let mut kdb = Kdb::new("localhost", 1234, "josh", "password");
