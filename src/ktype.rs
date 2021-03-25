@@ -1,6 +1,5 @@
-use uuid::Uuid;
 use std::fmt;
-
+use uuid::Uuid;
 use chrono::{Date, DateTime, Utc, NaiveDateTime, NaiveDate, Datelike, Timelike};
 use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
 
@@ -25,6 +24,8 @@ pub enum KType {
     Minute(DateTime<Utc>),
     Second(DateTime<Utc>),
     Time(DateTime<Utc>),
+    Unary(u8),
+    Operator(u8),
 }
 
 impl fmt::Display for KType {
@@ -50,11 +51,106 @@ impl fmt::Display for KType {
             KType::Minute(k)    => write!(f, "{}", k.format("%H:%M")),
             KType::Second(k)    => write!(f, "{}", k.format("%H:%M:%S")),
             KType::Time(k)      => write!(f, "{}", k.format("%H:%M:%S%.3f")),
+            KType::Unary(k)     => write!(f, "{}", KType::unary_mapping(k)),
+            KType::Operator(k)  => write!(f, "{}", KType::operator_mapping(k)),
         }
     }
 }
 
 impl KType {
+    fn unary_mapping(code: &u8) -> String {
+        let unary = match code {
+            0 => "::",
+            1 => "+:",
+            2 => "-:",
+            3 => "*:",
+            4 => "%:",
+            5 => "&:",
+            6 => "|:",
+            7 => "^:",
+            8 => "=:",
+            9 => "<:",
+           10 => ">:",
+           11 => "$:",
+           12 => ",:",
+           13 => "#:",
+           14 => "_:",
+           15 => "~:",
+           16 => "!:",
+           17 => "?:",
+           18 => "@:",
+           19 => ".:",
+           20 => "0::",
+           21 => "1::",
+           22 => "2::",
+           23 => "avg",
+           24 => "last",
+           25 => "sum",
+           26 => "prd",
+           27 => "min",
+           28 => "max",
+           29 => "exit",
+           30 => "getenv",
+           31 => "abs",
+           32 => "sqrt",
+           33 => "log",
+           34 => "exp",
+           35 => "sin",
+           36 => "asin",
+           37 => "cos",
+           38 => "acos",
+           39 => "tan",
+           40 => "atan",
+           41 => "enlist",
+           _  =>  "",
+       };
+       String::from(unary)
+    }
+
+    fn operator_mapping(code: &u8) -> String {
+        let op = match code {
+            0 =>  ":",
+            1 =>  "+",
+            2 =>  "-",
+            3 =>  "*",
+            4 =>  "%",
+            5 =>  "&",
+            6 =>  "|",
+            7 =>  "^",
+            8 =>  "=",
+            9 =>  "<",
+            10 => ">",
+            11 => "$",
+            12 => ",",
+            13 => "#",
+            14 => "_",
+            15 => "~",
+            16 => "!",
+            17 => "?",
+            18 => "@",
+            19 => ".",
+            20 => "0:",
+            21 => "1:",
+            22 => "2:",
+            23 => "in",
+            24 => "within",
+            25 => "like",
+            26 => "bin",
+            27 => "ss",
+            28 => "insert",
+            29 => "wsum",
+            30 => "wavg",
+            31 => "div",
+            32 => "xexp",
+            33 => "setenv",
+            34 => "binr",
+            35 => "cov",
+            36 => "cor",
+           _  =>  "",
+       };
+       String::from(op)
+    }
+
     pub fn serialize(&self) -> Vec<u8> {
         let mut buf: Vec<u8> = vec![];
         match self  {
@@ -84,6 +180,8 @@ impl KType {
             KType::Minute(n)    => {buf.write_i64::<LittleEndian>(n.timestamp_nanos() - 946684800000000000).unwrap(); buf},
             KType::Second(n)    => {buf.write_i64::<LittleEndian>(n.timestamp_nanos() - 946684800000000000).unwrap(); buf},
             KType::Time(n)      => {buf.write_i32::<LittleEndian>((n.time().num_seconds_from_midnight() * 1000 + n.time().nanosecond() / 1_000_000) as i32).unwrap();buf},
+            KType::Unary(n)     => vec![*n as u8],
+            KType::Operator(n)  => vec![*n as u8],
         }
     }
 
@@ -139,7 +237,9 @@ impl KType {
                 let s = LittleEndian::read_i32(data);
                 KType::Time(DateTime::<Utc>::from_utc(
                     NaiveDateTime::from_timestamp((s / 1000) as i64, 1_000_000*(s % 1_000) as u32), Utc))
-            }
+            },
+            KType::Unary(_)      => KType::Unary(data[0]),
+            KType::Operator(_)      => KType::Operator(data[0]),
         }
     }
 
@@ -164,6 +264,8 @@ impl KType {
             KType::Minute(_)    => -17,
             KType::Second(_)    => -18,
             KType::Time(_)      => -19,
+            KType::Unary(_)     => 101,
+            KType::Operator(_)  => 102,
         }
     }
 }

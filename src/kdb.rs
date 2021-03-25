@@ -1,9 +1,9 @@
-use std::net::{ TcpStream};
+use std::net::TcpStream;
 use std::io::{BufReader, BufWriter};
 use std::io::prelude::*;
 use std::io::{Error, Write};
 use byteorder::{LittleEndian, WriteBytesExt};
-use crate::{KObj};
+use crate::KObj;
 use super::header::Header;
 use super::ktype::KType;
 
@@ -107,7 +107,7 @@ impl Kdb {
         stream.read(&mut len).unwrap();
         let len = u32::from_le_bytes(len) as usize;
 
-        let mut string = Vec::with_capacity(len);
+        let mut string = vec![0;len];
         stream.read(&mut string).unwrap();
         string
     }
@@ -145,6 +145,8 @@ impl Kdb {
             KType::Minute(_)    => self.extract_atom(4),
             KType::Second(_)    => self.extract_atom(4),
             KType::Time(_)      => self.extract_atom(4),
+            KType::Unary(_)     => self.extract_atom(1),
+            KType::Operator(_)  => self.extract_atom(1),
         };
         KObj::Atom(ktype).deserialize(&vec_data)
     }
@@ -271,6 +273,7 @@ impl Kdb {
         data_bytes.splice(0..0, type_bytes);
         data_bytes.splice(0..0, size_bytes);
         data_bytes.splice(0..0, header_bytes);
+        // println!("{:?}", data_bytes);
         self.writer().write(&data_bytes).unwrap();
         self.writer().flush().unwrap();    
         let response = self.read();

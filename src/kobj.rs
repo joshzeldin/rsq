@@ -1,7 +1,7 @@
 use super::ktype::KType;
 use std::fmt;
 use uuid::Uuid;
-use chrono::{Utc};
+use chrono::Utc;
 use byteorder::{LittleEndian, WriteBytesExt};
 
 
@@ -90,6 +90,8 @@ impl KObj {
             -19 => KObj::Atom(KType::Time(Utc::now())),
              99 => KObj::Dict(vec![], vec![]),
              98 => KObj::Table(vec![], vec![]),
+            101 => KObj::Atom(KType::Unary(0)),
+            102 => KObj::Atom(KType::Operator(0)),
            -128 => KObj::Error(String::from("")),
               _ => KObj::Error(String::from(""))
         }
