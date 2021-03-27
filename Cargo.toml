@@ -2,6 +2,8 @@
 name = "rsq"
 version = "0.1.0"
 authors = []
+description = "A native rust interface for q/kdb+"
+license = "MIT"
 edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
