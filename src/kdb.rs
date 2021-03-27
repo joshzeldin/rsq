@@ -7,6 +7,8 @@ use crate::KObj;
 use super::header::Header;
 use super::ktype::KType;
 
+const UNSUPPORTED_TYPES: [i8;11] = [100, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112];
+
 pub struct Kdb {
     host: String,
     port: u16,
@@ -83,7 +85,14 @@ impl Kdb {
 
         let mut msg_type = [0;1];
         reader.read(&mut msg_type).unwrap();
-        let data = self.read_data(i8::from_le_bytes(msg_type));
+        let msg_type = i8::from_le_bytes(msg_type);
+
+        if UNSUPPORTED_TYPES.contains(&msg_type){
+            // clear the buffer and return error
+            reader.read(&mut vec![0;(msg_header.length - 8) as usize]).unwrap();
+            return KObj::Error(String::from("type unsupported by rsq"))
+        };
+        let data = self.read_data(msg_type);
 
         if msg_header.protocol == 1 {
             self.send_response(&KObj::Atom(KType::Boolean(true))).unwrap();
