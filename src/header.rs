@@ -20,11 +20,11 @@ impl Header {
         let mut protocol = [0;1]; 
         let mut msg_length = [0;4];
 
-        stream.read(&mut endian).unwrap();
-        stream.read(&mut protocol).unwrap();
+        stream.read_exact(&mut endian).unwrap();
+        stream.read_exact(&mut protocol).unwrap();
         // throw away two padding bytes
-        stream.read(&mut [0;2]).unwrap();
-        stream.read(&mut msg_length).unwrap();
+        stream.read_exact(&mut [0;2]).unwrap();
+        stream.read_exact(&mut msg_length).unwrap();
 
         if endian[0] == 1 {
             Header {

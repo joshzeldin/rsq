@@ -35,7 +35,7 @@ impl Kdb {
         let mut stream = TcpStream::connect(format!("{}:{}",self.host,self.port))?;
         let response = format!("{}:{}{}",self.user, self.pass, "\x06\x00");
         stream.write(response.as_bytes())?;
-        stream.read(&mut [0; 1])?;
+        stream.read_exact(&mut [0; 1])?;
         self.reader = Some(BufReader::new(stream.try_clone()?));
         self.writer = Some(BufWriter::new(stream));
         Ok(())
@@ -84,12 +84,12 @@ impl Kdb {
 
 
         let mut msg_type = [0;1];
-        reader.read(&mut msg_type).unwrap();
+        reader.read_exact(&mut msg_type).unwrap();
         let msg_type = i8::from_le_bytes(msg_type);
 
         if UNSUPPORTED_TYPES.contains(&msg_type){
             // clear the buffer and return error
-            reader.read(&mut vec![0;(msg_header.length - 8) as usize]).unwrap();
+            reader.read_exact(&mut vec![0;(msg_header.length - 8) as usize]).unwrap();
             return KObj::Error(String::from("type unsupported by rsq"))
         };
         let data = self.read_data(msg_type);
@@ -104,20 +104,20 @@ impl Kdb {
 
     fn extract_atom(&mut self, len: usize) -> Vec<u8> {
         let mut vec = vec![0;len];
-        self.reader().read(&mut vec).unwrap();
+        self.reader().read_exact(&mut vec).unwrap();
         vec
     }
 
     fn extract_string(&mut self) -> Vec<u8> {
         let stream = self.reader();
-        stream.read(&mut [0;1]).unwrap(); // discard attribute
+        stream.read_exact(&mut [0;1]).unwrap(); // discard attribute
 
         let mut len = [0;4];
-        stream.read(&mut len).unwrap();
+        stream.read_exact(&mut len).unwrap();
         let len = u32::from_le_bytes(len) as usize;
 
         let mut string = vec![0;len];
-        stream.read(&mut string).unwrap();
+        stream.read_exact(&mut string).unwrap();
         string
     }
 
@@ -126,7 +126,7 @@ impl Kdb {
         let mut sym = vec![];
         let mut bit = [1;1];
         loop {
-            stream.read(&mut bit).unwrap();
+            stream.read_exact(&mut bit).unwrap();
             if bit[0] == 0 { break };
             sym.push(bit[0]);
         }
@@ -173,7 +173,7 @@ impl Kdb {
         let mut list = vec![];
         for _ in 0..len{
             let mut msg_type = [0;1];
-            self.reader().read(&mut msg_type).unwrap();
+            self.reader().read_exact(&mut msg_type).unwrap();
             let msg_code = i8::from_le_bytes(msg_type);
             list.push(self.read_data(msg_code));
         };  
@@ -182,9 +182,9 @@ impl Kdb {
 
     fn read_list(&mut self, msg_type: i8) -> KObj {
         let mut attr = [0;1];
-        self.reader().read(&mut attr).unwrap(); // throw away attribute for now
+        self.reader().read_exact(&mut attr).unwrap(); // throw away attribute for now
         let mut len = [0;4];                     // extract vector length
-        self.reader().read(&mut len).unwrap();
+        self.reader().read_exact(&mut len).unwrap();
         let len = u32::from_le_bytes(len);
         if msg_type == 0 {
             self.read_generic_list(len)
@@ -196,13 +196,13 @@ impl Kdb {
     fn read_dict(&mut self) -> KObj {
 
         let mut key_type = [0;1];
-        self.reader().read(&mut key_type).unwrap();
+        self.reader().read_exact(&mut key_type).unwrap();
         let key_type = i8::from_le_bytes(key_type);
 
         let keys = self.read_data(key_type);
 
         let mut val_type = [0;1];
-        self.reader().read(&mut val_type).unwrap();
+        self.reader().read_exact(&mut val_type).unwrap();
         let val_type = i8::from_le_bytes(val_type);
         let vals = self.read_data(val_type);
 
@@ -223,13 +223,13 @@ impl Kdb {
     fn read_table(&mut self) -> KObj {
 
         let mut key_type = [0;1];
-        self.reader().read(&mut key_type).unwrap();
+        self.reader().read_exact(&mut key_type).unwrap();
         let key_type = i8::from_le_bytes(key_type);
 
         let keys = self.read_data(key_type);
 
         let mut val_type = [0;1];
-        self.reader().read(&mut val_type).unwrap();
+        self.reader().read_exact(&mut val_type).unwrap();
         let val_type = i8::from_le_bytes(val_type);
         let vals = self.read_data(val_type);
 
@@ -260,7 +260,7 @@ impl Kdb {
             KObj::GenericList(_) => self.read_list(msg_type),
             KObj::Dict(_,_) => self.read_dict(),
             KObj::Table(_,_) => {
-                self.reader().read(&mut[0;2]).unwrap();
+                self.reader().read_exact(&mut[0;2]).unwrap();
                 self.read_table()
             },
             KObj::Error(_) => {
