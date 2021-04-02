@@ -1,6 +1,6 @@
 [package]
 name = "rsq"
-version = "0.1.0"
+version = "0.1.1"
 authors = []
 description = "A native rust interface for q/kdb+"
 license = "MIT"
