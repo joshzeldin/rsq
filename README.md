@@ -1,3 +1,5 @@
+[![License](https://img.shields.io/badge/License-MIT-brightgreen.svg)](https://github.com/joshzeldin/rsq/blob/master/LICENSE)
+[![Build Status](https://travis-ci.com/joshzeldin/rsq.svg?branch=master)](https://travis-ci.com/joshzeldin/rsq)
 Connect to a kdb+ service using native rust.
 Provides support for kdb+ connectivity using 
 uncompressed serialization and deserialization, 
