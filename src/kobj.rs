@@ -6,13 +6,15 @@ use byteorder::{LittleEndian, WriteBytesExt};
 
 
 #[derive(Debug)]
+#[derive(PartialEq)]
 pub enum KObj {
     Atom(KType),
     List(Vec<KObj>),
     GenericList(Vec<KObj>),
     Dict(Vec<KObj>, Vec<KObj>),
     Table(Vec<KObj>, Vec<KObj>),
-    Error(String)
+    Error(String),
+    Lambda(String)
 }
 
 impl fmt::Display for KObj {
@@ -55,6 +57,9 @@ impl fmt::Display for KObj {
                 let vals = String::from("(") + &vals.join(";") + ")";
                 write!(f, "{}", vals)
             },
+            KObj::Lambda(l) => {
+                write!(f, "{}", l)
+            }
             KObj::Error(e) => {
                 write!(f, "'{}", e)
             }
@@ -90,6 +95,7 @@ impl KObj {
             -19 => KObj::Atom(KType::Time(Utc::now())),
              99 => KObj::Dict(vec![], vec![]),
              98 => KObj::Table(vec![], vec![]),
+            100 => KObj::Lambda(String::from("")),
             101 => KObj::Atom(KType::Unary(0)),
             102 => KObj::Atom(KType::Operator(0)),
            -128 => KObj::Error(String::from("")),
@@ -141,6 +147,7 @@ impl KObj {
             },
             KObj::Dict(_,_) => vec![],
             KObj::Table(_,_) => vec![],
+            KObj::Lambda(_) => vec![],
             KObj::Error(_) => vec![]
         }
     }
@@ -159,6 +166,7 @@ impl KObj {
             KObj::GenericList(_) => 0u8,
             KObj::Dict(_,_) => 99u8,
             KObj::Table(_,_) => 98u8,
+            KObj::Lambda(_) => 100u8,
             KObj::Error(_) =>  0u8
         };
         code as u8

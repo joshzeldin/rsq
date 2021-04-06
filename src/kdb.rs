@@ -1,36 +1,23 @@
 use std::net::TcpStream;
 use std::io::{BufReader, BufWriter};
-use std::io::prelude::*;
-use std::io::{Error, Write};
+use std::io::{ErrorKind, Error, Write, Read};
 use byteorder::{LittleEndian, WriteBytesExt};
 use crate::KObj;
 use super::header::Header;
 use super::ktype::KType;
 
-const UNSUPPORTED_TYPES: [i8;11] = [100, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112];
+const UNSUPPORTED_TYPES: [i8;10] = [103, 104, 105, 106, 107, 108, 109, 110, 111, 112];
 
-pub struct Kdb {
+pub struct Kdb<R: Read, W:Write> {
     host: String,
     port: u16,
     user: String,
     pass: String,
-    reader: Option<BufReader<TcpStream>>,
-    writer: Option<BufWriter<TcpStream>>
+    reader: Option<BufReader<R>>,
+    writer: Option<BufWriter<W>>
 }
 
-impl Kdb {
-
-    pub fn new(host: &str, port: u16, user: &str, pass: &str) -> Kdb {
-        Kdb {
-            host: host.to_string(),
-            port,
-            user: user.to_string(),
-            pass: pass.to_string(),
-            reader: None,
-            writer: None
-        }
-    }
-
+impl Kdb<TcpStream, TcpStream> {
     pub fn open(&mut self) -> Result<(),Error> {
         let mut stream = TcpStream::connect(format!("{}:{}",self.host,self.port))?;
         let response = format!("{}:{}{}",self.user, self.pass, "\x06\x00");
@@ -41,11 +28,36 @@ impl Kdb {
         Ok(())
     }
 
-    pub fn reader(&mut self) -> &mut BufReader<TcpStream> {
+    pub fn new(host: &str, port: u16, user: &str, pass: &str) -> Kdb<TcpStream,TcpStream> {
+        Kdb {
+            host: host.to_string(),
+            port,
+            user: user.to_string(),
+            pass: pass.to_string(),
+            reader: None,
+            writer: None
+        }
+    }
+}
+
+impl<R: Read, W: Write> Kdb<R,W> {
+
+    fn new_test(host: &str, port: u16, user: &str, pass: &str) -> Kdb<R,W> {
+        Kdb {
+            host: host.to_string(),
+            port,
+            user: user.to_string(),
+            pass: pass.to_string(),
+            reader: None,
+            writer: None
+        }
+    }
+
+    pub fn reader(&mut self) -> &mut BufReader<R> {
         self.reader.as_mut().unwrap()
     }
 
-    pub fn writer(&mut self) -> &mut BufWriter<TcpStream> {
+    pub fn writer(&mut self) -> &mut BufWriter<W> {
         self.writer.as_mut().unwrap()
     }
 
@@ -57,7 +69,7 @@ impl Kdb {
 
     pub fn send_async(&mut self, data: &KObj) -> Result<(), Error> {
         if self.writer.is_none() {
-            self.open()?;
+            return Err(Error::new(ErrorKind::ConnectionRefused, "no writer available"))
         };
         let header_bytes = vec![1, 0, 0, 0];
         let mut data_bytes = data.serialize();
@@ -74,10 +86,7 @@ impl Kdb {
 
     pub fn read(&mut self) -> KObj {
         if self.reader.is_none() {
-            match self.open() {
-                Ok(_) => {},
-                Err(e) => {return KObj::Error(format!("{}",e))}
-            };
+            return KObj::Error("no reader available".to_string())
         };
         let msg_header = Header::read(self);
         let reader = self.reader();
@@ -89,7 +98,7 @@ impl Kdb {
 
         if UNSUPPORTED_TYPES.contains(&msg_type){
             // clear the buffer and return error
-            reader.read_exact(&mut vec![0;(msg_header.length - 8) as usize]).unwrap();
+            reader.read_exact(&mut vec![0;(msg_header.length - 9) as usize]).unwrap();
             return KObj::Error(String::from("type unsupported by rsq"))
         };
         let data = self.read_data(msg_type);
@@ -177,7 +186,7 @@ impl Kdb {
             let msg_code = i8::from_le_bytes(msg_type);
             list.push(self.read_data(msg_code));
         };  
-        KObj::List(list)
+        KObj::GenericList(list)
     }  
 
     fn read_list(&mut self, msg_type: i8) -> KObj {
@@ -213,6 +222,7 @@ impl Kdb {
 
         let vals = match vals {
             KObj::List(k) => k,
+            KObj::GenericList(k) => k,
            _ => return KObj::Error("keys of dictionary must be a list".to_string()) // this shouldn't happen
         };
         
@@ -240,11 +250,23 @@ impl Kdb {
 
         let vals = match vals {
             KObj::List(k) => k,
+            KObj::GenericList(k) => k,
            _ => return KObj::Error("keys of dictionary must be a list".to_string()) // this shouldn't happen
         };
         
         KObj::Table(keys, vals)
      
+    }
+
+    fn read_lambda(&mut self) -> KObj {
+        let stream = self.reader();
+        stream.read_exact(&mut [0;3]).unwrap();
+        let mut len = [0;4];
+        stream.read_exact(&mut len).unwrap();
+        let len = i32::from_le_bytes(len) as usize;
+        let mut lambda = vec![0;len];
+        stream.read_exact(&mut lambda).unwrap();
+        KObj::Lambda(String::from_utf8(lambda).unwrap())
     }
 
     fn read_error(&mut self) -> KObj {
@@ -263,6 +285,9 @@ impl Kdb {
                 self.reader().read_exact(&mut[0;2]).unwrap();
                 self.read_table()
             },
+            KObj::Lambda(_) => {
+                self.read_lambda()
+            }
             KObj::Error(_) => {
                 self.read_error()
             }
@@ -272,7 +297,7 @@ impl Kdb {
 
     pub fn send_sync(&mut self, data: &KObj) -> Result<KObj, Error> {
         if self.writer.is_none() {
-            self.open()?;
+            return Err(Error::new(ErrorKind::ConnectionRefused, "no writer available"))
         };
         let header_bytes = vec![1, 1, 0, 0];
         let mut data_bytes = data.serialize();
@@ -284,14 +309,14 @@ impl Kdb {
         data_bytes.splice(0..0, header_bytes);
         // println!("{:?}", data_bytes);
         self.writer().write(&data_bytes).unwrap();
-        self.writer().flush().unwrap();    
+        self.writer().flush().unwrap(); 
         let response = self.read();
         Ok(response)
     }
 
     pub fn send_response(&mut self, data: &KObj) -> Result<(), Error> {
         if self.writer.is_none() {
-            self.open()?;
+            return Err(Error::new(ErrorKind::ConnectionRefused, "no writer available"))
         };
         let header_bytes = vec![1, 2, 0, 0];
         let mut data_bytes = data.serialize();
@@ -304,5 +329,87 @@ impl Kdb {
         self.writer().write(&data_bytes).unwrap();
         self.writer().flush().unwrap();    
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod atom_tests {
+    use super::*;
+    use uuid::Uuid;
+
+    fn setup_kdb() -> Kdb<&'static [u8], Vec<u8>> {
+        Kdb::new_test("localhost", 1234, "user", "pass")
+    }
+
+    #[test]
+    fn read_boolean() {
+        let mut kdb = setup_kdb();
+        let byte_data = vec![1, 0, 0, 0, 10, 0, 0, 0, 255, 1];
+        kdb.reader = Some(BufReader::new(byte_data.as_slice()));
+        let data = kdb.read();
+        assert_eq!(data, KObj::Atom(KType::Boolean(true)));
+    }
+
+    #[test]
+    fn write_boolean() {
+        let mut kdb = setup_kdb();
+        let byte_data = vec![];
+        kdb.writer = Some(BufWriter::new(byte_data));
+        kdb.send_async(&KObj::Atom(KType::Boolean(true))).unwrap();
+        assert_eq!(kdb.writer.unwrap().buffer(), vec![1, 0, 0, 0, 10, 0, 0, 0, 255, 1]);
+    }
+
+    #[test]
+    fn read_guid() {
+        let mut kdb = setup_kdb();
+        let byte_data = vec![1, 0, 0, 0, 25, 0, 0, 0, 254, 204, 69, 164, 216, 188, 197, 0, 49, 235, 69, 53, 147, 191, 81, 97, 76];
+        kdb.reader = Some(BufReader::new(byte_data.as_slice()));
+        let data = kdb.read();
+        assert_eq!(data, KObj::Atom(KType::Guid(Uuid::parse_str("cc45a4d8-bcc5-0031-eb45-3593bf51614c").unwrap())));
+    }
+
+    #[test]
+    fn write_guid() {
+        let mut kdb = setup_kdb();
+        let byte_data = vec![];
+        kdb.writer = Some(BufWriter::new(byte_data));
+        kdb.send_async(&KObj::Atom(KType::Guid(Uuid::parse_str("cc45a4d8-bcc5-0031-eb45-3593bf51614c").unwrap()))).unwrap();
+        assert_eq!(kdb.writer.unwrap().buffer(), vec![1, 0, 0, 0, 25, 0, 0, 0, 254, 204, 69, 164, 216, 188, 197, 0, 49, 235, 69, 53, 147, 191, 81, 97, 76]);
+    }
+
+    #[test]
+    fn read_byte() {
+        let mut kdb = setup_kdb();
+        let byte_data = vec![1, 0, 0, 0, 10, 0, 0, 0, 252, 2];
+        kdb.reader = Some(BufReader::new(byte_data.as_slice()));
+        let data = kdb.read();
+        assert_eq!(data, KObj::Atom(KType::Byte(2)));
+    }
+
+    #[test]
+    fn write_byte() {
+        let mut kdb = setup_kdb();
+        let byte_data = vec![];
+        kdb.writer = Some(BufWriter::new(byte_data));
+        kdb.send_async(&KObj::Atom(KType::Byte(2))).unwrap();
+        assert_eq!(kdb.writer.unwrap().buffer(), vec![1, 0, 0, 0, 10, 0, 0, 0, 252, 2]);
+    }
+
+    #[test]
+    fn read_symbol() {
+        let mut kdb = setup_kdb();
+        let byte_data = vec![1, 0, 0, 0, 15, 0, 0, 0, 245, 104, 101, 108, 108, 111, 0];
+        kdb.reader = Some(BufReader::new(byte_data.as_slice()));
+        let data = kdb.read();
+        assert_eq!(data, KObj::Atom(KType::Symbol(String::from("hello"))));
+    }
+
+    #[test]
+    fn write_symbol() {
+        let mut kdb = setup_kdb();
+        let byte_data = vec![];
+        kdb.writer = Some(BufWriter::new(byte_data));
+        kdb.send_async(&KObj::Atom(KType::Symbol(String::from("hello")))).unwrap();
+        assert_eq!(kdb.writer.unwrap().buffer(), vec![1, 0, 0, 0, 15, 0, 0, 0, 245, 104, 101, 108, 108, 111, 0]);
     }
 }

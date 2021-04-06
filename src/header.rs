@@ -1,5 +1,5 @@
 use super::kdb::Kdb;
-use std::io::prelude::*;
+use std::io::{Read, Write};
 
 pub struct Header {
     pub endian: Endian,
@@ -13,7 +13,7 @@ pub enum Endian {
 }
 
 impl Header {
-    pub fn read(kdb: &mut Kdb) -> Header {
+    pub fn read<R:Read, W:Write>(kdb: &mut Kdb<R,W>) -> Header {
 
         let stream = kdb.reader();
         let mut endian = [0;1];

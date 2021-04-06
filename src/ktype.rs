@@ -4,6 +4,7 @@ use chrono::{Date, DateTime, Utc, NaiveDateTime, NaiveDate, Datelike, Timelike};
 use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
 
 #[derive(Debug)]
+#[derive(PartialEq)]
 pub enum KType {
     Boolean(bool),
     Guid(Uuid),

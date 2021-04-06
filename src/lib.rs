@@ -37,6 +37,7 @@
 //! 
 //! ```no_run
 //! use rsq::{Kdb, KObj, KType};
+//! use std::net::TcpStream;
 //! let mut kdb = Kdb::new("localhost", 5001, "username", "password");
 //! 
 //! kdb.send_async(&KObj::List(vec![
