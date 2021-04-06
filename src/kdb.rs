@@ -42,17 +42,6 @@ impl Kdb<TcpStream, TcpStream> {
 
 impl<R: Read, W: Write> Kdb<R,W> {
 
-    fn new_test(host: &str, port: u16, user: &str, pass: &str) -> Kdb<R,W> {
-        Kdb {
-            host: host.to_string(),
-            port,
-            user: user.to_string(),
-            pass: pass.to_string(),
-            reader: None,
-            writer: None
-        }
-    }
-
     pub fn reader(&mut self) -> &mut BufReader<R> {
         self.reader.as_mut().unwrap()
     }
@@ -338,7 +327,14 @@ mod atom_tests {
     use uuid::Uuid;
 
     fn setup_kdb() -> Kdb<&'static [u8], Vec<u8>> {
-        Kdb::new_test("localhost", 1234, "user", "pass")
+        Kdb {
+            host: "localhost".to_string(),
+            port: 1234,
+            user: "user".to_string(),
+            pass: "pass".to_string(),
+            reader: None,
+            writer: None
+        }
     }
 
     #[test]
@@ -393,6 +389,132 @@ mod atom_tests {
         kdb.writer = Some(BufWriter::new(byte_data));
         kdb.send_async(&KObj::Atom(KType::Byte(2))).unwrap();
         assert_eq!(kdb.writer.unwrap().buffer(), vec![1, 0, 0, 0, 10, 0, 0, 0, 252, 2]);
+    }
+
+    #[test]
+    fn read_short() {
+        let mut kdb = setup_kdb();
+        let byte_data = vec![1, 0, 0, 0, 11, 0, 0, 0, 251, 160, 2];
+        kdb.reader = Some(BufReader::new(byte_data.as_slice()));
+        let data = kdb.read();
+        assert_eq!(data, KObj::Atom(KType::Short(672)));
+    }
+
+    #[test]
+    fn write_short() {
+        let mut kdb = setup_kdb();
+        let byte_data = vec![];
+        kdb.writer = Some(BufWriter::new(byte_data));
+        kdb.send_async(&KObj::Atom(KType::Short(672))).unwrap();
+        assert_eq!(kdb.writer.unwrap().buffer(), vec![1, 0, 0, 0, 11, 0, 0, 0, 251, 160, 2]);
+    }
+
+    #[test]
+    fn read_int() {
+        let mut kdb = setup_kdb();
+        let byte_data = vec![1, 0, 0, 0, 13, 0, 0, 0, 250, 170, 253, 255, 255];
+        kdb.reader = Some(BufReader::new(byte_data.as_slice()));
+        let data = kdb.read();
+        assert_eq!(data, KObj::Atom(KType::Int(-598)));
+    }
+
+    #[test]
+    fn write_int() {
+        let mut kdb = setup_kdb();
+        let byte_data = vec![];
+        kdb.writer = Some(BufWriter::new(byte_data));
+        kdb.send_async(&KObj::Atom(KType::Int(-598))).unwrap();
+        assert_eq!(kdb.writer.unwrap().buffer(), vec![1, 0, 0, 0, 13, 0, 0, 0, 250, 170, 253, 255, 255]);
+    }
+
+    #[test]
+    fn read_long() {
+        let mut kdb = setup_kdb();
+        let byte_data = vec![1, 0, 0, 0, 17, 0, 0, 0, 249, 22, 91, 146, 10, 33, 2, 0, 0];
+        kdb.reader = Some(BufReader::new(byte_data.as_slice()));
+        let data = kdb.read();
+        assert_eq!(data, KObj::Atom(KType::Long(2_340_934_540_054)));
+    }
+
+    #[test]
+    fn write_long() {
+        let mut kdb = setup_kdb();
+        let byte_data = vec![];
+        kdb.writer = Some(BufWriter::new(byte_data));
+        kdb.send_async(&KObj::Atom(KType::Long(2_340_934_540_054))).unwrap();
+        assert_eq!(kdb.writer.unwrap().buffer(), vec![1, 0, 0, 0, 17, 0, 0, 0, 249, 22, 91, 146, 10, 33, 2, 0, 0]);
+    }
+
+    #[test]
+    fn read_real() {
+        let mut kdb = setup_kdb();
+        let byte_data = vec![1, 0, 0, 0, 13, 0, 0, 0, 248, 10, 215, 157, 66];
+        kdb.reader = Some(BufReader::new(byte_data.as_slice()));
+        let data = kdb.read();
+        assert_eq!(data, KObj::Atom(KType::Real(78.92)));
+    }
+
+    #[test]
+    fn write_real() {
+        let mut kdb = setup_kdb();
+        let byte_data = vec![];
+        kdb.writer = Some(BufWriter::new(byte_data));
+        kdb.send_async(&KObj::Atom(KType::Real(78.92))).unwrap();
+        assert_eq!(kdb.writer.unwrap().buffer(), vec![1, 0, 0, 0, 13, 0, 0, 0, 248, 10, 215, 157, 66]);
+    }
+
+    #[test]
+    fn read_float() {
+        let mut kdb = setup_kdb();
+        let byte_data = vec![1, 0, 0, 0, 17, 0, 0, 0, 247, 76, 55, 137, 65, 213, 77, 247, 64];
+        kdb.reader = Some(BufReader::new(byte_data.as_slice()));
+        let data = kdb.read();
+        assert_eq!(data, KObj::Atom(KType::Float(95453.3285)));
+    }
+
+    #[test]
+    fn write_float() {
+        let mut kdb = setup_kdb();
+        let byte_data = vec![];
+        kdb.writer = Some(BufWriter::new(byte_data));
+        kdb.send_async(&KObj::Atom(KType::Float(95453.3285))).unwrap();
+        assert_eq!(kdb.writer.unwrap().buffer(), vec![1, 0, 0, 0, 17, 0, 0, 0, 247, 76, 55, 137, 65, 213, 77, 247, 64]);
+    }
+
+    #[test]
+    fn read_char() {
+        let mut kdb = setup_kdb();
+        let byte_data = vec![1, 0, 0, 0, 10, 0, 0, 0, 246, 36];
+        kdb.reader = Some(BufReader::new(byte_data.as_slice()));
+        let data = kdb.read();
+        assert_eq!(data, KObj::Atom(KType::Char('$')));
+    }
+
+    #[test]
+    fn write_char() {
+        let mut kdb = setup_kdb();
+        let byte_data = vec![];
+        kdb.writer = Some(BufWriter::new(byte_data));
+        kdb.send_async(&KObj::Atom(KType::Char('$'))).unwrap();
+        assert_eq!(kdb.writer.unwrap().buffer(), vec![1, 0, 0, 0, 10, 0, 0, 0, 246, 36]);
+    }
+
+    #[test]
+    fn read_string() {
+        let mut kdb = setup_kdb();
+        let byte_data = vec![1, 0, 0, 0, 18, 0, 0, 0, 10, 0, 4, 0, 0, 0, 240, 159, 152, 130];
+        kdb.reader = Some(BufReader::new(byte_data.as_slice()));
+        let data = kdb.read();
+        assert_eq!(data, KObj::Atom(KType::String("😂".to_string())));
+    }
+
+    #[test]
+    fn write_string() {
+        let mut kdb = setup_kdb();
+        let byte_data = vec![];
+        kdb.writer = Some(BufWriter::new(byte_data));
+        kdb.send_async(&KObj::Atom(KType::String("😂".to_string()))).unwrap();
+        assert_eq!(kdb.writer.unwrap().buffer(), vec![1, 0, 0, 0, 18, 0, 0, 0, 10, 0, 4, 0, 0, 0, 240, 159, 152, 130]);
     }
 
     #[test]
